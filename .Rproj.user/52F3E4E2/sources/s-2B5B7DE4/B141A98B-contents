@@ -1,0 +1,60 @@
+# Checking zip codes for locations and duplicates
+
+
+# Identifying duplicate observations from zip codes and creating a dataset for a research assistant to check for suspicious responses
+d$DuplicatedZip <- duplicated(d$DemoZip)
+d %>% filter(DuplicatedZip == TRUE) -> dupZip
+dupZip <- dupZip[order(dupZip$DemoZip),]
+write_csv(dupZip, file = 'data/EXTREMEdata_duplicatedZipCodes.csv')
+
+
+d %>%
+  dplyr::select(ResponseId, IPAddress, LocationLatitude, LocationLongitude, DemoState, DemoZip) -> l
+
+# Fixing zip code format
+# Adding a zero for 4 digit zip codes
+l$zip <- str_trim(l$DemoZip, side = c("both"))
+l$zip <- ifelse(nchar(l$zip) == 4, paste("0", l$zip, sep = ""), l$zip)
+l$zip <- substr(l$zip, 1, 5)
+
+#l$zip <- l$DemoZip
+l$state <- l$DemoState
+
+# Creating state abbreviations variables from reported state
+l$stateAbb <- state.abb[match(l$state,state.name)]  
+l$stateAbb <- ifelse(l$state == "District of Columbia", "DC", l$stateAbb)
+l[which(is.na(l$stateAbb)),]  # checking conversion
+
+# Creating state variable from zip code - 
+l$stateFromZip <- NA
+for (i in 1:nrow(l)) {
+  if (!is.na(l$zip[i])) {
+    l$stateFromZip[i] <- reverse_zipcode(l$zip[i])$state
+  }
+  if (is.na(l$zip[i])) {
+    l$stateFromZip[i] <- NA
+  }
+}
+
+# Cross-check state and zip code
+l$stateMatchZip <- ifelse(l$stateAbb == l$stateFromZip, 1, NA)  # if reported state matches reported zip, stateMatchZip == 1
+l$stateMatchZip <- ifelse(!is.na(l$zip) & is.na(l$stateMatchZip), 0, l$stateMatchZip)  # if a zip code was reported, but does not match state, stateMatchZip == 0
+table(l$stateMatchZip)  # 59 observations have zip codes that are not matched to a state.
+sum(is.na(l$stateMatchZip)) # 12 NAs
+
+# Creating a dataset for a research assistant to check invalid zip codes
+l %>% filter(stateMatchZip == 0 | is.na(l$stateMatchZip)) -> misfitZips
+write_csv(misfitZips, file = "data/EXTREMEdata_misfitZips.csv")
+
+# Marking mismatched of reported zip code and reported state as invalid (after checking for typos)
+l$invalidResponse <- NA
+l$invalidResponse <- ifelse(l$stateMatchZip == 0, 1, 0)
+table(l$invalidResponse)
+
+# Adding modified zip code variable "zip" and invalidResponse tag for mismatches in zip and state to the full dataset
+l %>%
+  dplyr::select(ResponseId, zip, invalidResponse) %>%
+  full_join(d, by = "ResponseId") -> d
+
+d %>%
+  filter(invalidResponse == 0) -> d
